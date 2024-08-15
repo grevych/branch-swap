@@ -1,0 +1,174 @@
+version: 2.1
+orbs:
+  go: circleci/go@1.11.0
+  commitlint: conventional-changelog/commitlint@1.0
+
+parameters:
+  rebuild_cache:
+    type: boolean
+    default: false
+
+# Extra contexts to expose to all jobs below
+contexts: &contexts
+  - aws-credentials
+  - ghaccesstoken
+  - docker-registry
+  - npm-credentials
+  - vault-dev
+  - confluence
+  - circleci-credentials
+  - tray-webhooks
+
+# Configuration to pass to test and cache jobs
+cfg: &cfg
+  context: *contexts
+
+# Branches used for releasing code, pre-release or not
+release_branches: &release_branches
+  - "main"
+
+executors:
+  commitlint-executor:
+    docker:
+      - image: cimg/node:current
+    working_directory: ~/project
+
+jobs:
+  test:
+    executor:
+      name: go/default # Use the default executor from the orb
+      tag: "1.22.2" # Specify a version tag
+    steps:
+      - checkout # checkout source code
+      - go/load-cache # Load cached Go modules.
+      - go/mod-download # Run 'go mod download'.
+      - go/save-cache # Save Go modules to cache.
+      - run:
+          name: Run unit tests
+          command: make test
+      - run:
+          name: Run integration tests
+          command: make integration-test
+  check-releaser:
+    docker:
+      - image: cimg/go:1.20
+    steps:
+      - checkout
+      - run: curl -sfL https://goreleaser.com/static/run | bash -s -- check
+  dry-release:
+    docker:
+      - image: cimg/go:1.20
+    steps:
+      - checkout
+      - run: curl -sfL https://goreleaser.com/static/run | bash -s -- release --snapshot --clean
+  release:
+    docker:
+      - image: cimg/go:1.20
+    steps:
+      - run: curl -sL https://git.io/autotag-install | sudo sh -s -- -b /usr/bin
+      - checkout
+      - run: autotag --scheme=conventional
+      - run: curl -sfL https://goreleaser.com/static/run | bash
+  setup-commitlint:
+    executor: commitlint-executor
+    steps:
+      - checkout
+      - restore_cache:
+          key: lock-{{ checksum "package-lock.json" }}
+      - run:
+          name: Install dependencies
+          command: npm install
+      - save_cache:
+          key: lock-{{ checksum "package-lock.json" }}
+          paths:
+            - node_modules
+      - persist_to_workspace:
+          root: ~/project
+          paths:
+            - node_modules
+  lint-commit:
+    executor: commitlint-executor
+    steps:
+      - checkout
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Define environment variable with latest commit's message
+          command: |
+            echo 'export COMMIT_MESSAGE=$(git log -1 --pretty=format:"%s")' >> $BASH_ENV
+            source $BASH_ENV
+      - run:
+          name: Lint commit message
+          command: echo "$COMMIT_MESSAGE" | npx commitlint
+  check-initial-tag:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - run:
+          name: Check initial tag v0.0.0
+          command: make check-initial-tag
+
+
+workflows:
+  released-version:
+    jobs:
+      - test:
+          # Only run this job on git tag pushes
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /v[0-9]+(\.[0-9]+)*(-.*)*/
+  main:
+    jobs:
+      - setup-commitlint:
+          filters:
+            branches:
+              only: main
+      - lint-commit:
+          requires:
+            - setup-commitlint
+          # Only run this job on git tag pushes
+          filters:
+            branches:
+              only: main
+      - test:
+          # Only run this job on git tag pushes
+          filters:
+            branches:
+              only: main
+      - check-initial-tag:
+          # Only run this job on git tag pushes
+          filters:
+            branches:
+              only: main
+      - dry-release:
+          # Only run this job on git tag pushes
+          filters:
+            branches:
+              only: main
+      - release:
+          # Only run this job on git tag pushes
+          requires:
+            - lint-commit
+            - test
+            - check-initial-tag
+            - dry-release
+          filters:
+            branches:
+              only: main
+
+  branch:
+    jobs:
+      - setup-commitlint
+      - lint-commit:
+          requires:
+            - setup-commitlint
+      - test:
+          filters:
+            branches:
+              ignore: main
+            tags:
+              ignore: /.*/
+      - check-releaser
