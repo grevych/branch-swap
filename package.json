@@ -1,0 +1,7 @@
+{
+  "type": "module",
+  "devDependencies": {
+    "@commitlint/cli": "^19.4.0",
+    "@commitlint/config-conventional": "^19.2.2"
+  }
+}

@@ -17,9 +17,19 @@
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
+# node
+node_modules/
+
 # Go workspace file
 go.work
 go.work.sum
 
 # env file
 .env
+
+# binaries
+bin/
+
+# dev-tools
+.tool-versions
+.branchswap
