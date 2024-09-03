@@ -1,0 +1,8 @@
+
+go install goreleaser (asdf)
+goreleaser init
+
+
+ npm install --save-dev @commitlint/{cli,config-conventional}
+ npx commitlint
+ add type: module to package.json
